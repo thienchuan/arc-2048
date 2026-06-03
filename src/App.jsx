@@ -8,6 +8,24 @@ import {
 } from "./components/gameLogic";
 import { IoMdRefresh } from "react-icons/io";
 import GameOverPopup from "./components/GameOverPopup";
+import { getTxExplorerLink } from "./blockchain/arcConfig";
+import { toUserFacingMintError } from "./blockchain/errors";
+import { checkGameIdMinted, mintResultNft } from "./blockchain/mintResultNft";
+import {
+  connectWallet,
+  ensureArcNetwork,
+  getCurrentAccount,
+  getCurrentChainId,
+  getWalletProvider,
+} from "./blockchain/wallet";
+import { createGameSession, getGameDurationSeconds } from "./utils/gameSession";
+
+const INITIAL_MINT_STATE = {
+  status: "idle",
+  txHash: "",
+  tokenId: "",
+  error: "",
+};
 
 const App = () => {
   const [grid, setGrid] = useState(initializeGrid());
@@ -20,14 +38,22 @@ const App = () => {
   const [gameOver, setGameOver] = useState(false);
   const [gameWon, setGameWon] = useState(false);
   const [gameStarted, setGameStarted] = useState(false);
+  const [gameSession, setGameSession] = useState(() => createGameSession());
+  const [walletAccount, setWalletAccount] = useState("");
+  const [walletChainId, setWalletChainId] = useState(null);
+  const [walletMessage, setWalletMessage] = useState("");
+  const [mintState, setMintState] = useState(INITIAL_MINT_STATE);
+  const [mintedGameIds, setMintedGameIds] = useState({});
   const touchStartX = useRef(null);
   const touchStartY = useRef(null);
+  const gameEnded = gameOver || gameWon;
 
-  const handleKeyDown = (e) => {
-    const { newGrid, newScore, newTiles, mergedTiles } = moveTiles(
-      grid,
-      e.key.replace("Arrow", "").toLowerCase()
-    );
+  const runMove = (direction) => {
+    if (gameEnded) {
+      return;
+    }
+
+    const { newGrid, newScore, newTiles, mergedTiles } = moveTiles(grid, direction);
 
     if (newGrid) {
       setGrid(newGrid);
@@ -43,10 +69,18 @@ const App = () => {
     }
   };
 
+  const handleKeyDown = (e) => {
+    if (!e.key.startsWith("Arrow")) {
+      return;
+    }
+
+    runMove(e.key.replace("Arrow", "").toLowerCase());
+  };
+
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [grid]);
+  }, [grid, gameEnded]);
 
   useEffect(() => {
     if (score > bestScore) {
@@ -63,23 +97,13 @@ const App = () => {
     setGameOver(false);
     setGameWon(false);
     setGameStarted(true);
+    setGameSession(createGameSession());
+    setMintState(INITIAL_MINT_STATE);
+    setWalletMessage("");
   };
 
   const handleSwipe = (direction) => {
-    const { newGrid, newScore, newTiles, mergedTiles } = moveTiles(
-      grid,
-      direction
-    );
-
-    if (newGrid) {
-      setGrid(newGrid);
-      setScore((prevScore) => prevScore + newScore);
-      setNewTiles(newTiles);
-      setMergedTiles(mergedTiles);
-      if (isGameOver(newGrid)) {
-        setGameOver(true);
-      }
-    }
+    runMove(direction);
   };
 
   useEffect(() => {
@@ -125,7 +149,138 @@ const App = () => {
       window.removeEventListener("touchstart", handleTouchStart);
       window.removeEventListener("touchmove", handleTouchMove);
     };
-  }, [grid]);
+  }, [grid, gameEnded]);
+
+  useEffect(() => {
+    const syncWallet = async () => {
+      try {
+        const account = await getCurrentAccount();
+        const chainId = await getCurrentChainId();
+        setWalletAccount(account);
+        setWalletChainId(chainId);
+      } catch {
+        // Wallet may not be installed yet.
+      }
+    };
+
+    syncWallet();
+  }, []);
+
+  useEffect(() => {
+    let provider;
+    try {
+      provider = getWalletProvider();
+    } catch {
+      return;
+    }
+
+    const handleAccountsChanged = (accounts) => {
+      setWalletAccount(accounts[0] || "");
+      setWalletMessage("");
+    };
+
+    const handleChainChanged = (chainHex) => {
+      setWalletChainId(Number.parseInt(chainHex, 16));
+      setWalletMessage("");
+    };
+
+    provider.on("accountsChanged", handleAccountsChanged);
+    provider.on("chainChanged", handleChainChanged);
+
+    return () => {
+      provider.removeListener("accountsChanged", handleAccountsChanged);
+      provider.removeListener("chainChanged", handleChainChanged);
+    };
+  }, []);
+
+  const handleConnectWallet = async () => {
+    try {
+      setWalletMessage("");
+      const account = await connectWallet();
+      const chainId = await ensureArcNetwork();
+      setWalletAccount(account);
+      setWalletChainId(chainId);
+    } catch (error) {
+      setWalletMessage(toUserFacingMintError(error));
+    }
+  };
+
+  const handleMintResult = async () => {
+    if (!gameEnded) return;
+    if (!walletAccount) {
+      setMintState({ ...INITIAL_MINT_STATE, status: "failed", error: "Please connect wallet first." });
+      return;
+    }
+    if (score <= 0) {
+      setMintState({ ...INITIAL_MINT_STATE, status: "failed", error: "Invalid score. Score must be greater than 0." });
+      return;
+    }
+    if (mintedGameIds[gameSession.gameId]) {
+      setMintState({ ...INITIAL_MINT_STATE, status: "failed", error: "This gameId has already been minted." });
+      return;
+    }
+
+    try {
+      setMintState({ ...INITIAL_MINT_STATE, status: "waiting_wallet_confirm" });
+      const chainId = await ensureArcNetwork();
+      setWalletChainId(chainId);
+
+      const currentAccount = await getCurrentAccount();
+      if (!currentAccount) {
+        throw new Error("Wallet is disconnected. Please connect wallet again.");
+      }
+      if (currentAccount.toLowerCase() !== walletAccount.toLowerCase()) {
+        setWalletAccount(currentAccount);
+      }
+
+      const alreadyMinted = await checkGameIdMinted(gameSession.gameId);
+      if (alreadyMinted) {
+        throw new Error("DuplicateGameId");
+      }
+
+      const playedAt = Math.floor(Date.now() / 1000);
+      const durationSeconds = getGameDurationSeconds(gameSession.startedAt);
+
+      const { txHash, tokenId } = await mintResultNft({
+        account: currentAccount,
+        score,
+        durationSeconds,
+        gameId: gameSession.gameId,
+        playedAt,
+        onTxSubmitted: (hash) => {
+          setMintState({
+            status: "pending_tx",
+            txHash: hash,
+            tokenId: "",
+            error: "",
+          });
+        },
+      });
+
+      setMintedGameIds((prev) => ({ ...prev, [gameSession.gameId]: true }));
+      setMintState({ status: "success", txHash, tokenId, error: "" });
+    } catch (error) {
+      console.error("Mint result NFT failed:", error);
+      setMintState({
+        status: "failed",
+        txHash: "",
+        tokenId: "",
+        error: toUserFacingMintError(error),
+      });
+    }
+  };
+
+  const canMint =
+    gameEnded &&
+    score > 0 &&
+    Boolean(walletAccount) &&
+    !mintedGameIds[gameSession.gameId] &&
+    mintState.status !== "waiting_wallet_confirm" &&
+    mintState.status !== "pending_tx";
+
+  const txExplorerLink = getTxExplorerLink(mintState.txHash);
+  const durationSeconds = getGameDurationSeconds(gameSession.startedAt);
+  const popupTitle = gameWon ? "You Won!" : "Game Over";
 
   return (
     <div className="flex flex-col items-center justify-center h-screen bg-gray-900">
@@ -136,7 +291,7 @@ const App = () => {
           </h1>
           <button
             className="text-2xl font-semibold bg-gray-800 hover:bg-gray-700 rounded-md text-white py-2 px-4 transition duration-300 ease-in-out transform hover:scale-105"
-            onClick={() => setGameStarted(true)}
+            onClick={handleNewGame}
           >
             Start Game
           </button>
@@ -154,29 +309,37 @@ const App = () => {
               Best: {bestScore}
             </div>
             <button
+              className="text-sm font-semibold bg-indigo-700 hover:bg-indigo-600 rounded-md text-white py-2 px-3 transition duration-300 ease-in-out"
+              onClick={handleConnectWallet}
+            >
+              {walletAccount ? "Wallet Connected" : "Connect Wallet"}
+            </button>
+            <button
               className="text-2xl font-semibold bg-gray-800 hover:bg-gray-700 rounded-md text-white py-2 px-3 transition duration-300 ease-in-out transform hover:scale-105"
               onClick={handleNewGame}
             >
               <IoMdRefresh />
             </button>
           </div>
-          <Board grid={grid} newTiles={newTiles} mergedTiles={mergedTiles} />
-          {gameOver && (
-            <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50">
-              <div className="bg-gray-800 px-8 py-4 rounded shadow-lg flex flex-col items-center">
-                <h2 className="text-4xl font-bold mb-4 text-white">
-                  Game Over
-                </h2>
-                <button
-                  className="mt-2 p-2 bg-gray-800 text-white rounded transition duration-300 ease-in-out transform hover:scale-105"
-                  onClick={handleNewGame}
-                >
-                  Try Again
-                </button>
-              </div>
-            </div>
+          {walletMessage && (
+            <p className="text-sm text-amber-300 mb-3">{walletMessage}</p>
           )}
-          {gameWon && <GameOverPopup onNewGame={handleNewGame} />}
+          <Board grid={grid} newTiles={newTiles} mergedTiles={mergedTiles} />
+          {gameEnded && (
+            <GameOverPopup
+              title={popupTitle}
+              score={score}
+              durationSeconds={durationSeconds}
+              gameId={gameSession.gameId}
+              account={walletAccount}
+              canMint={canMint}
+              mintState={mintState}
+              txExplorerLink={txExplorerLink}
+              onConnectWallet={handleConnectWallet}
+              onMintResult={handleMintResult}
+              onNewGame={handleNewGame}
+            />
+          )}
         </>
       )}
     </div>
