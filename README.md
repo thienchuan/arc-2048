@@ -95,8 +95,50 @@ npm run contract:compile
 5. Deploy contract to Arc testnet:
 
 ```bash
+npm run contract:deploy:sepolia
+```
+
+### Deploy commands for all configured networks
+
+Legacy script (kept for backward compatibility):
+
+```bash
 npm run contract:deploy:arc
 ```
+
+Testnet:
+
+```bash
+npm run contract:deploy:arcTestnet
+npm run contract:deploy:optimismSepolia
+npm run contract:deploy:sepolia
+npm run contract:deploy:arbitrumSepolia
+npm run contract:deploy:baseSepolia
+npm run contract:deploy:polygonAmoy
+```
+
+Mainnet:
+
+```bash
+npm run contract:deploy:arbitrum
+npm run contract:deploy:base
+npm run contract:deploy:polygon
+npm run contract:deploy:optimism
+```
+
+Recommended environment variables for deployment RPC endpoints:
+
+- `ARC_RPC_URL`
+- `OPTIMISM_SEPOLIA_RPC_URL`
+- `SEPOLIA_RPC_URL`
+- `ARBITRUM_SEPOLIA_RPC_URL`
+- `BASE_SEPOLIA_RPC_URL`
+- `POLYGON_AMOY_RPC_URL`
+- `ARBITRUM_RPC_URL`
+- `BASE_RPC_URL`
+- `POLYGON_RPC_URL`
+- `OPTIMISM_RPC_URL`
+- `DEPLOYER_PRIVATE_KEY`
 
 6. Put deployed address into `.env`:
 

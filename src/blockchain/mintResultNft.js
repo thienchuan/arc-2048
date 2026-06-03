@@ -1,39 +1,77 @@
-import { createPublicClient, createWalletClient, custom, http, parseEventLogs } from "viem";
-import { ARC_CHAIN_CONFIG, ARC_VIEM_CHAIN } from "./arcConfig";
-import {
-  GAME_2048_RESULT_NFT_ABI,
-  GAME_2048_RESULT_NFT_ADDRESS,
-} from "./contracts/game2048ResultNft";
+import { createPublicClient, createWalletClient, custom, defineChain, http, parseEventLogs } from "viem";
+import { GAME_2048_RESULT_NFT_ABI } from "./contracts/game2048ResultNft";
+import { getMintContractAddressByChainId, getNetworkById } from "./networks";
 import { getWalletProvider } from "./wallet";
 
-const requireContractAddress = () => {
-  if (!GAME_2048_RESULT_NFT_ADDRESS) {
-    throw new Error("Missing VITE_2048_NFT_CONTRACT_ADDRESS environment variable.");
+const getCurrentWalletChainId = async () => {
+  const provider = getWalletProvider();
+  const chainHex = await provider.request({ method: "eth_chainId" });
+  const chainId = Number.parseInt(chainHex, 16);
+
+  if (!Number.isFinite(chainId)) {
+    throw new Error("Wrong chain context. Please reconnect wallet and try again.");
   }
-  return GAME_2048_RESULT_NFT_ADDRESS;
+
+  return chainId;
 };
 
-const createClients = () => {
+const resolveMintNetwork = (chainId) => {
+  const network = getNetworkById(chainId);
+  if (!network) {
+    throw new Error("Wrong chain context. Please switch to a supported network and try again.");
+  }
+
+  return network;
+};
+
+const toViemChain = (network) =>
+  defineChain({
+    id: network.id,
+    name: network.name,
+    nativeCurrency: {
+      name: network.currencyName,
+      symbol: network.currencySymbol,
+      decimals: network.currencyDecimals,
+    },
+    rpcUrls: {
+      default: { http: [network.rpcUrl] },
+      public: { http: [network.rpcUrl] },
+    },
+    blockExplorers: {
+      default: {
+        name: `${network.name} Explorer`,
+        url: network.blockExplorer,
+      },
+    },
+    testnet: network.testnet,
+  });
+
+const createClients = (network) => {
   const provider = getWalletProvider();
+  const chain = toViemChain(network);
+
   const publicClient = createPublicClient({
-    chain: ARC_VIEM_CHAIN,
-    transport: http(ARC_CHAIN_CONFIG.rpcUrl, {
+    chain,
+    transport: http(network.rpcUrl, {
       timeout: 15000,
       retryCount: 1,
     }),
   });
 
   const walletClient = createWalletClient({
-    chain: ARC_VIEM_CHAIN,
+    chain,
     transport: custom(provider),
   });
 
-  return { publicClient, walletClient };
+  return { publicClient, walletClient, chain };
 };
 
-export const checkGameIdMinted = async (gameId) => {
-  const address = requireContractAddress();
-  const { publicClient } = createClients();
+export const checkGameIdMinted = async (gameId, chainId) => {
+  const resolvedChainId = chainId ?? (await getCurrentWalletChainId());
+  const network = resolveMintNetwork(resolvedChainId);
+  const address = getMintContractAddressByChainId(resolvedChainId);
+  const { publicClient } = createClients(network);
+
   return publicClient.readContract({
     address,
     abi: GAME_2048_RESULT_NFT_ABI,
@@ -48,10 +86,13 @@ export const mintResultNft = async ({
   durationSeconds,
   gameId,
   playedAt,
+  chainId,
   onTxSubmitted,
 }) => {
-  const address = requireContractAddress();
-  const { walletClient, publicClient } = createClients();
+  const resolvedChainId = chainId ?? (await getCurrentWalletChainId());
+  const network = resolveMintNetwork(resolvedChainId);
+  const address = getMintContractAddressByChainId(resolvedChainId);
+  const { walletClient, publicClient, chain } = createClients(network);
 
   const [connectedAccount] = await walletClient.getAddresses();
   if (!connectedAccount || connectedAccount.toLowerCase() !== account.toLowerCase()) {
@@ -59,7 +100,7 @@ export const mintResultNft = async ({
   }
 
   const txHash = await walletClient.writeContract({
-    chain: ARC_VIEM_CHAIN,
+    chain,
     address,
     abi: GAME_2048_RESULT_NFT_ABI,
     functionName: "mintResult",
@@ -84,5 +125,5 @@ export const mintResultNft = async ({
   });
 
   const tokenId = resultEvents[0]?.args?.tokenId?.toString() || "";
-  return { txHash, tokenId };
+  return { txHash, tokenId, chainId: resolvedChainId };
 };

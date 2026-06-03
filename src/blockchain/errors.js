@@ -12,11 +12,41 @@ const hasMessage = (error, target) => {
   return message.includes(target.toLowerCase());
 };
 
+export const toUserFacingWalletError = (error) => {
+  if (!error) return "Unknown wallet error.";
+
+  if (error?.name === "WalletUnavailableError") {
+    return "No wallet extension found. Please install MetaMask or another EVM wallet.";
+  }
+
+  if (error?.code === 4001) {
+    return "Wallet request rejected by user.";
+  }
+
+  if (error?.code === 4902 || hasMessage(error, "wallet_addethereumchain")) {
+    return "The selected network is not available in your wallet. Please add it and try again.";
+  }
+
+  if (hasMessage(error, "wallet_switchethereumchain")) {
+    return "Unable to switch network in wallet. Please approve the network switch request.";
+  }
+
+  return error.shortMessage || error.message || "Wallet operation failed.";
+};
+
 export const toUserFacingMintError = (error) => {
   if (!error) return "Unknown error.";
 
+  if (error?.name === "WalletUnavailableError") {
+    return "No wallet extension found. Please install MetaMask or another EVM wallet.";
+  }
+
   if (error?.code === 4001) {
     return "Transaction rejected by user.";
+  }
+
+  if (hasMessage(error, "Mint is not configured for this network yet.")) {
+    return "Mint is not configured for this network yet.";
   }
 
   if (hasMessage(error, "DuplicateGameId") || hasMessage(error, "duplicate game id")) {
@@ -24,7 +54,7 @@ export const toUserFacingMintError = (error) => {
   }
 
   if (hasMessage(error, "insufficient funds")) {
-    return "Insufficient USDC for gas on Arc network.";
+    return "Insufficient funds for gas on the current network.";
   }
 
   if (hasMessage(error, "timeout")) {
@@ -40,7 +70,7 @@ export const toUserFacingMintError = (error) => {
   ];
 
   if (chainMismatchPatterns.some((pattern) => hasMessage(error, pattern))) {
-    return "Wrong chain selected. Please switch to Arc Testnet (chainId 5042002).";
+    return "Wrong chain selected. Please switch to a supported network and try again.";
   }
 
   return error.shortMessage || error.message || "Mint failed.";

@@ -13,7 +13,17 @@
     "test:contract": "hardhat test",
     "test:ui": "vitest run",
     "contract:compile": "hardhat compile",
-    "contract:deploy:arc": "hardhat run scripts/deploy.js --network arcTestnet"
+    "contract:deploy:arc": "hardhat run scripts/deploy.js --network arcTestnet",
+    "contract:deploy:arcTestnet": "hardhat run deploy.js --network arcTestnet",
+    "contract:deploy:optimismSepolia": "hardhat run deploy.js --network optimismSepolia",
+    "contract:deploy:sepolia": "hardhat run deploy.js --network sepolia",
+    "contract:deploy:arbitrumSepolia": "hardhat run deploy.js --network arbitrumSepolia",
+    "contract:deploy:baseSepolia": "hardhat run deploy.js --network baseSepolia",
+    "contract:deploy:polygonAmoy": "hardhat run deploy.js --network polygonAmoy",
+    "contract:deploy:arbitrum": "hardhat run deploy.js --network arbitrum",
+    "contract:deploy:base": "hardhat run deploy.js --network base",
+    "contract:deploy:polygon": "hardhat run deploy.js --network polygon",
+    "contract:deploy:optimism": "hardhat run deploy.js --network optimism"
   },
   "dependencies": {
     "clsx": "^2.1.1",

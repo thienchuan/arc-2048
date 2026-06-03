@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import Board from "./components/Board";
 import {
   initializeGrid,
@@ -8,13 +8,20 @@ import {
 } from "./components/gameLogic";
 import { IoMdRefresh } from "react-icons/io";
 import GameOverPopup from "./components/GameOverPopup";
-import { getTxExplorerLink } from "./blockchain/arcConfig";
-import { toUserFacingMintError } from "./blockchain/errors";
+import { toUserFacingMintError, toUserFacingWalletError } from "./blockchain/errors";
 import { checkGameIdMinted, mintResultNft } from "./blockchain/mintResultNft";
 import {
+  ARC_NETWORK,
+  getNetworkById,
+  getTxExplorerLinkByChainId,
+  SUPPORTED_NETWORKS,
+} from "./blockchain/networks";
+import {
   connectWallet,
-  ensureArcNetwork,
+  ensureNetwork,
+  formatNativeBalance,
   getCurrentAccount,
+  getNativeBalance,
   getCurrentChainId,
   getWalletProvider,
 } from "./blockchain/wallet";
@@ -25,6 +32,12 @@ const INITIAL_MINT_STATE = {
   txHash: "",
   tokenId: "",
   error: "",
+  chainId: null,
+};
+
+const shortenAddress = (address) => {
+  if (!address) return "";
+  return `${address.slice(0, 6)}...${address.slice(-4)}`;
 };
 
 const App = () => {
@@ -41,14 +54,17 @@ const App = () => {
   const [gameSession, setGameSession] = useState(() => createGameSession());
   const [walletAccount, setWalletAccount] = useState("");
   const [walletChainId, setWalletChainId] = useState(null);
+  const [selectedNetworkId, setSelectedNetworkId] = useState(ARC_NETWORK.id);
+  const [walletNativeBalance, setWalletNativeBalance] = useState("");
   const [walletMessage, setWalletMessage] = useState("");
   const [mintState, setMintState] = useState(INITIAL_MINT_STATE);
   const [mintedGameIds, setMintedGameIds] = useState({});
   const touchStartX = useRef(null);
   const touchStartY = useRef(null);
   const gameEnded = gameOver || gameWon;
+  const selectedNetwork = getNetworkById(selectedNetworkId) || ARC_NETWORK;
 
-  const runMove = (direction) => {
+  const runMove = useCallback((direction) => {
     if (gameEnded) {
       return;
     }
@@ -67,20 +83,20 @@ const App = () => {
         setGameWon(true);
       }
     }
-  };
+  }, [gameEnded, grid]);
 
-  const handleKeyDown = (e) => {
+  const handleKeyDown = useCallback((e) => {
     if (!e.key.startsWith("Arrow")) {
       return;
     }
 
     runMove(e.key.replace("Arrow", "").toLowerCase());
-  };
+  }, [runMove]);
 
   useEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [grid, gameEnded]);
+  }, [handleKeyDown]);
 
   useEffect(() => {
     if (score > bestScore) {
@@ -102,9 +118,9 @@ const App = () => {
     setWalletMessage("");
   };
 
-  const handleSwipe = (direction) => {
+  const handleSwipe = useCallback((direction) => {
     runMove(direction);
-  };
+  }, [runMove]);
 
   useEffect(() => {
     const handleTouchStart = (e) => {
@@ -149,7 +165,7 @@ const App = () => {
       window.removeEventListener("touchstart", handleTouchStart);
       window.removeEventListener("touchmove", handleTouchMove);
     };
-  }, [grid, gameEnded]);
+  }, [handleSwipe]);
 
   useEffect(() => {
     const syncWallet = async () => {
@@ -158,6 +174,10 @@ const App = () => {
         const chainId = await getCurrentChainId();
         setWalletAccount(account);
         setWalletChainId(chainId);
+
+        if (getNetworkById(chainId)) {
+          setSelectedNetworkId(chainId);
+        }
       } catch {
         // Wallet may not be installed yet.
       }
@@ -180,7 +200,11 @@ const App = () => {
     };
 
     const handleChainChanged = (chainHex) => {
-      setWalletChainId(Number.parseInt(chainHex, 16));
+      const parsedChainId = Number.parseInt(chainHex, 16);
+      setWalletChainId(parsedChainId);
+      if (getNetworkById(parsedChainId)) {
+        setSelectedNetworkId(parsedChainId);
+      }
       setWalletMessage("");
     };
 
@@ -193,15 +217,64 @@ const App = () => {
     };
   }, []);
 
+  useEffect(() => {
+    const refreshNativeBalance = async () => {
+      if (!walletAccount) {
+        setWalletNativeBalance("");
+        return;
+      }
+
+      try {
+        const balance = await getNativeBalance(walletAccount);
+        const formattedBalance = formatNativeBalance(
+          balance,
+          selectedNetwork.currencyDecimals,
+          selectedNetwork.currencySymbol
+        );
+        setWalletNativeBalance(formattedBalance);
+      } catch {
+        setWalletNativeBalance(`-- ${selectedNetwork.currencySymbol}`);
+      }
+    };
+
+    refreshNativeBalance();
+  }, [walletAccount, walletChainId, selectedNetworkId, selectedNetwork.currencyDecimals, selectedNetwork.currencySymbol]);
+
   const handleConnectWallet = async () => {
     try {
       setWalletMessage("");
       const account = await connectWallet();
-      const chainId = await ensureArcNetwork();
+      const chainId = await ensureNetwork(selectedNetwork);
       setWalletAccount(account);
       setWalletChainId(chainId);
     } catch (error) {
-      setWalletMessage(toUserFacingMintError(error));
+      setWalletMessage(toUserFacingWalletError(error));
+    }
+  };
+
+  const handleNetworkChange = async (event) => {
+    const nextNetworkId = Number(event.target.value);
+    const nextNetwork = getNetworkById(nextNetworkId);
+    if (!nextNetwork) {
+      return;
+    }
+
+    const previousNetworkId = selectedNetworkId;
+    setSelectedNetworkId(nextNetworkId);
+    setWalletMessage("");
+
+    if (!walletAccount) {
+      return;
+    }
+
+    try {
+      const chainId = await ensureNetwork(nextNetwork);
+      setWalletChainId(chainId);
+    } catch (error) {
+      const fallbackNetworkId =
+        walletChainId && getNetworkById(walletChainId) ? walletChainId : previousNetworkId;
+      setSelectedNetworkId(fallbackNetworkId);
+      setWalletMessage(toUserFacingWalletError(error));
     }
   };
 
@@ -222,8 +295,11 @@ const App = () => {
 
     try {
       setMintState({ ...INITIAL_MINT_STATE, status: "waiting_wallet_confirm" });
-      const chainId = await ensureArcNetwork();
+      const chainId = await getCurrentChainId();
       setWalletChainId(chainId);
+      if (getNetworkById(chainId)) {
+        setSelectedNetworkId(chainId);
+      }
 
       const currentAccount = await getCurrentAccount();
       if (!currentAccount) {
@@ -233,7 +309,7 @@ const App = () => {
         setWalletAccount(currentAccount);
       }
 
-      const alreadyMinted = await checkGameIdMinted(gameSession.gameId);
+      const alreadyMinted = await checkGameIdMinted(gameSession.gameId, chainId);
       if (alreadyMinted) {
         throw new Error("DuplicateGameId");
       }
@@ -247,18 +323,20 @@ const App = () => {
         durationSeconds,
         gameId: gameSession.gameId,
         playedAt,
+        chainId,
         onTxSubmitted: (hash) => {
           setMintState({
             status: "pending_tx",
             txHash: hash,
             tokenId: "",
             error: "",
+            chainId,
           });
         },
       });
 
       setMintedGameIds((prev) => ({ ...prev, [gameSession.gameId]: true }));
-      setMintState({ status: "success", txHash, tokenId, error: "" });
+      setMintState({ status: "success", txHash, tokenId, error: "", chainId });
     } catch (error) {
       console.error("Mint result NFT failed:", error);
       setMintState({
@@ -266,6 +344,7 @@ const App = () => {
         txHash: "",
         tokenId: "",
         error: toUserFacingMintError(error),
+        chainId: null,
       });
     }
   };
@@ -278,7 +357,10 @@ const App = () => {
     mintState.status !== "waiting_wallet_confirm" &&
     mintState.status !== "pending_tx";
 
-  const txExplorerLink = getTxExplorerLink(mintState.txHash);
+  const txExplorerLink = getTxExplorerLinkByChainId(
+    mintState.txHash,
+    mintState.chainId || walletChainId
+  );
   const durationSeconds = getGameDurationSeconds(gameSession.startedAt);
   const popupTitle = gameWon ? "You Won!" : "Game Over";
 
@@ -301,12 +383,34 @@ const App = () => {
           <h1 className="text-6xl font-bold mb-4 text-white drop-shadow-lg">
             2048
           </h1>
-          <div className="flex mb-4 space-x-4 items-center justify-between">
+          <div className="flex mb-4 gap-3 flex-wrap items-center justify-center">
             <div className="text-xl font-semibold bg-gray-800 rounded-md text-white py-2 px-3 shadow-lg">
               Score: {score}
             </div>
             <div className="text-xl font-semibold bg-gray-800 rounded-md text-white py-2 px-3 shadow-lg">
               Best: {bestScore}
+            </div>
+            <div className="flex items-center gap-2 bg-gray-800 rounded-md py-2 px-3 shadow-lg">
+              <label htmlFor="network-select" className="text-xs text-gray-300 font-semibold">
+                Network
+              </label>
+              <select
+                id="network-select"
+                value={selectedNetworkId}
+                onChange={handleNetworkChange}
+                className="text-sm font-semibold rounded-md border border-slate-300 px-2 py-1"
+                style={{ color: "#0f172a", backgroundColor: "#f1f5f9", WebkitTextFillColor: "#0f172a" }}
+              >
+                {SUPPORTED_NETWORKS.map((network) => (
+                  <option
+                    key={network.id}
+                    value={network.id}
+                    style={{ color: "#0f172a", backgroundColor: "#f8fafc", WebkitTextFillColor: "#0f172a" }}
+                  >
+                    {network.name}
+                  </option>
+                ))}
+              </select>
             </div>
             <button
               className="text-sm font-semibold bg-indigo-700 hover:bg-indigo-600 rounded-md text-white py-2 px-3 transition duration-300 ease-in-out"
@@ -321,6 +425,18 @@ const App = () => {
               <IoMdRefresh />
             </button>
           </div>
+          {walletAccount && (
+            <div className="w-full max-w-md bg-gray-800 rounded-md px-4 py-3 mb-3 text-sm text-gray-100 shadow-lg">
+              <p className="mb-1" title={walletAccount}>
+                Address: {shortenAddress(walletAccount)}
+              </p>
+              <p className="mb-1">Native Balance: {walletNativeBalance || `0 ${selectedNetwork.currencySymbol}`}</p>
+              <p className="text-xs text-gray-300">
+                Active Chain: {selectedNetwork.name}
+                {walletChainId ? ` (#${walletChainId})` : ""}
+              </p>
+            </div>
+          )}
           {walletMessage && (
             <p className="text-sm text-amber-300 mb-3">{walletMessage}</p>
           )}

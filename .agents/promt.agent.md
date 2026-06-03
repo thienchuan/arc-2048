@@ -1,78 +1,49 @@
-
-Bạn là senior full-stack blockchain engineer. Hãy tích hợp tính năng mint kết quả game 2048 thành NFT chuẩn ERC-721 trên Arc Network cho workspace hiện tại.
+Bạn là coding agent trong dự án React hiện tại. Hãy refactor luồng mint NFT để mint theo mạng người dùng đang dùng, và cấu hình contract address trực tiếp trong networks.js thay vì .env.
 
 Mục tiêu:
-- Khi người chơi game over, cho phép mint 1 NFT đại diện kết quả ván chơi.
-- Mỗi NFT phải gắn với 1 gameId duy nhất, không cho mint trùng gameId.
-- UI text trong ứng dụng phải là English.
+1. User ở mạng nào thì mint trên mạng đó.
+2. Contract address của NFT được lấy từ cấu hình mạng trong networks.js.
+3. Không làm hỏng gameplay 2048 và các luồng wallet hiện có.
 
-Yêu cầu kỹ thuật bắt buộc:
-1. Blockchain network (Arc):
-- EVM compatible Arc Network.
-- Chain ID: 5042002.
-- Gas token: USDC.
-- Cấu hình mạng theo docs: https://docs.arc.io/arc-chain#arc-network và RPC endpoints từ tài liệu Arc.
+Yêu cầu chi tiết:
 
-2. Smart contract ERC-721:
-- Tạo contract Solidity sử dụng OpenZeppelin ERC721 (có thể dùng ERC721URIStorage nếu cần).
-- Đặt tên rõ ràng, ví dụ: Game2048ResultNFT.
-- Lưu mapping gameId => đã mint để chặn mint trùng.
-- Mint function nhận dữ liệu kết quả và mint cho địa chỉ người chơi.
-- Dữ liệu tối thiểu cần được đưa vào metadata/tokenURI:
-  - playerAddress
-  - score
-  - durationSeconds
-  - gameId
-  - playedAt (unix timestamp)
-- Phát event khi mint thành công, ví dụ ResultMinted(player, tokenId, gameId, score, playedAt).
-- Có custom error hoặc require message rõ ràng cho các trường hợp: duplicate gameId, invalid score, invalid player.
+1. Cấu hình contract address trong networks.js
+1. Thêm field nftContractAddress vào từng network trong src/blockchain/networks.js.
+2. Ít nhất Arc - Testnet phải có address hợp lệ sẵn.
+3. Các mạng chưa deploy có thể để rỗng, nhưng phải được xử lý lỗi thân thiện khi mint.
+4. Không phụ thuộc vào biến VITE_2048_NFT_CONTRACT_ADDRESS trong .env cho luồng mint nữa.
 
-3. Metadata và tokenURI:
-- Thiết kế metadata JSON theo chuẩn ERC-721 metadata.
-- Có field name, description, image (nếu chưa có image thì dùng placeholder), attributes.
-- attributes phải có ít nhất: Score, Duration, GameId, PlayedAt.
-- Trình bày cách lưu metadata:
-  - Ưu tiên cách đơn giản để chạy local (có thể dùng base64 on-chain tokenURI),
-  - Nếu dùng off-chain (IPFS/server) thì tạo abstraction để dễ thay thế.
+2. Helper resolve contract theo chain
+1. Tạo helper lấy contract address theo chainId hiện tại, ví dụ getMintContractAddressByChainId.
+2. Nếu không có address cho chain hiện tại, throw lỗi business rõ ràng để map ra message user-friendly:
+Mint is not configured for this network yet.
 
-4. Frontend integration (React 2048):
-- Thêm Connect Wallet button.
-- Thêm Mint Result NFT button trong game over popup/screen.
-- Chỉ enable mint khi:
-  - game over,
-  - score hợp lệ,
-  - chưa mint gameId hiện tại,
-  - wallet đã connect.
-- Hiển thị state đầy đủ: idle, waiting wallet confirm, pending tx, success, failed.
-- Hiển thị tx hash, tokenId sau khi mint, và explorer link nếu có.
-- Có network guard:
-  - Nếu sai chain thì yêu cầu switch sang Arc chainId 5042002.
-- Xử lý lỗi rõ ràng: user reject, wrong chain, duplicate gameId, RPC timeout/failure, insufficient gas token.
+3. Refactor mint flow đa mạng
+1. Bỏ logic ép switch về Arc trước khi mint.
+2. Mint bằng chain hiện tại của wallet/user selection.
+3. Public client và wallet client phải tạo theo network hiện tại, không hardcode Arc.
+4. Explorer tx link sau mint phải dựa vào blockExplorer của network vừa mint.
+5. Giữ nguyên các validation hiện có: wallet connected, score > 0, duplicate gameId, trạng thái pending/success/failed.
 
-5. Cấu trúc code và config:
-- Tách riêng module blockchain config, contract ABI/address, wallet utilities.
-- Không hardcode thông tin nhạy cảm trong UI components.
-- Dùng biến môi trường cho: RPC URL, contract address, chain settings.
-- Giữ nguyên logic game hiện tại, chỉ mở rộng tính năng mint.
+4. Tương thích và UX
+1. Không phá API các hàm hiện có nếu module khác đang dùng.
+2. Nếu cần, giữ wrapper cũ để backward compatibility.
+3. Xử lý lỗi thân thiện cho các trường hợp:
+No wallet extension, reject transaction, missing contract address, wrong chain context.
+4. Không hiển thị stack trace cho người dùng.
+5. UI text hiển thị bằng English.
 
-6. Testing bắt buộc:
-- Contract tests tối thiểu:
-  - mint thành công,
-  - event đúng dữ liệu,
-  - không cho mint trùng gameId,
-  - tokenURI/metadata chứa đúng fields.
-- Frontend flow test cơ bản:
-  - game over -> connect wallet -> mint -> nhận tx hash/tokenId.
+5. Test và verify
+1. Bổ sung hoặc cập nhật test cho:
+resolve contract address từ networks.js theo chainId.
+lỗi khi chain không có nftContractAddress.
+mint flow dùng đúng chain hiện tại và đúng explorer link.
+2. Chạy test và lint, báo kết quả rõ pass/fail.
+3. Báo danh sách file đã sửa và lý do ngắn gọn.
 
-7. Bàn giao kết quả:
-- Sau khi xong, cung cấp:
-  - Danh sách file đã thêm/sửa.
-  - Hướng dẫn chạy local từng bước.
-  - Lệnh deploy contract.
-  - Cách mint và verify giao dịch.
-  - Các giả định/hạn chế còn lại (nếu có).
-
-Ràng buộc thực thi:
-- Ưu tiên thay đổi nhỏ, đúng trọng tâm.
-- Không phá vỡ UI/UX hiện có.
-- Code rõ ràng, dễ bảo trì; chỉ thêm comment ngắn ở đoạn phức tạp.
+Tiêu chí nghiệm thu:
+1. Mint không còn phụ thuộc Arc-only.
+2. Contract address được lấy từ src/blockchain/networks.js.
+3. Không còn phụ thuộc VITE_2048_NFT_CONTRACT_ADDRESS trong luồng mint.
+4. Tx explorer link đúng theo mạng vừa mint.
+5. Không phát sinh runtime error mới ở luồng chính.

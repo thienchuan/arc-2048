@@ -1,22 +1,22 @@
 import { defineChain } from "viem";
+import { ARC_NETWORK } from "./networks";
 
-const CHAIN_ID = Number(import.meta.env.VITE_ARC_CHAIN_ID || 5042002);
+const CHAIN_ID = ARC_NETWORK.id;
 const CHAIN_HEX = `0x${CHAIN_ID.toString(16)}`;
 
-const DEFAULT_RPC_URL = "https://rpc.testnet.arc.network";
-const DEFAULT_RPC_WS_URL = "wss://rpc.testnet.arc.network";
+const DEFAULT_RPC_WS_URL = `wss://${ARC_NETWORK.rpcUrl.replace(/^https?:\/\//, "")}`;
 
 export const ARC_CHAIN_CONFIG = {
   chainId: CHAIN_ID,
   chainHex: CHAIN_HEX,
-  chainName: import.meta.env.VITE_ARC_CHAIN_NAME || "Arc Testnet",
-  rpcUrl: import.meta.env.VITE_ARC_RPC_URL || DEFAULT_RPC_URL,
+  chainName: ARC_NETWORK.name,
+  rpcUrl: ARC_NETWORK.rpcUrl,
   rpcWsUrl: import.meta.env.VITE_ARC_RPC_WS_URL || DEFAULT_RPC_WS_URL,
-  explorerUrl: import.meta.env.VITE_ARC_EXPLORER_URL || "https://testnet.arcscan.app",
+  explorerUrl: ARC_NETWORK.blockExplorer,
   nativeCurrency: {
-    name: "USDC",
-    symbol: "USDC",
-    decimals: 18,
+    name: ARC_NETWORK.currencyName,
+    symbol: ARC_NETWORK.currencySymbol,
+    decimals: ARC_NETWORK.currencyDecimals,
   },
 };
 
@@ -48,7 +48,7 @@ export const ARC_VIEM_CHAIN = defineChain({
       url: ARC_CHAIN_CONFIG.explorerUrl,
     },
   },
-  testnet: true,
+  testnet: ARC_NETWORK.testnet,
 });
 
 export const getTxExplorerLink = (txHash) => {
